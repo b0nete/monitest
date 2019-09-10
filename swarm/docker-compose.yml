@@ -1,0 +1,38 @@
+version: '3'
+
+services:
+  db:
+    image: postgres
+    #ports:
+    #  - "5432"
+    environment:
+      - POSTGRES_USER=mydatabaseuser
+      - POSTGRES_PASSWORD=mypassword
+      - POSTGRES_DB=mydatabase
+    networks:
+      - moni
+
+  frontend:
+    image: frontmoni
+    ports: 
+      - "3000:3000"
+    depends_on:
+      - db
+    networks:
+      - moni
+      - overlay
+
+  backend:
+    image: backmoni
+    ports: 
+      - "8000:8000"
+    environment:
+      - SECRET_KEY=quelargoesto
+    depends_on:
+      - db
+    networks:
+      - moni
+
+networks:
+  moni:
+  overlay:

@@ -1,0 +1,98 @@
+version: 2
+jobs:
+
+  test:
+    docker:
+      - image: circleci/node:8.9
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum "package.json" }}
+            - v1-dependencies-
+      - run:
+          name: Install dependencies
+          command: cd ./frontDeploy/frontend/ && npm install
+      - save_cache:
+          paths:
+            - node_modules
+          key: v1-dependencies-{{ checksum "package.json" }}
+      - run:
+          name: Run tests
+          command: cd ./frontDeploy/frontend/ && npm test
+
+  build:
+    docker:
+      - image: google/cloud-sdk
+    environment:
+      - PROJECT_NAME: "moni-test"
+      - GOOGLE_PROJECT_ID: "river-autumn-252317"
+    steps:
+      - checkout
+      - run: 
+          name: Setup Google Cloud SDK
+          command: |
+            apt-get install -qq -y gettext
+            echo $GCLOUD_SERVICE_KEY > ${HOME}/gcloud-service-key.json
+            gcloud auth activate-service-account --key-file=${HOME}/gcloud-service-key.json
+            gcloud --quiet config set project ${GOOGLE_PROJECT_ID}
+      - setup_remote_docker
+      - run: 
+          name: Docker build and push front
+          command: |
+            docker build \
+              --build-arg COMMIT_REF=${CIRCLE_SHA1} \
+              --build-arg BUILD_DATE=`date -u +”%Y-%m-%dT%H:%M:%SZ”` \
+              -t ${PROJECT_NAME}/monifront ./frontDeploy/.
+            docker tag ${PROJECT_NAME}/monifront eu.gcr.io/${GOOGLE_PROJECT_ID}/${PROJECT_NAME}/monifront:${CIRCLE_SHA1}
+            docker tag ${PROJECT_NAME}/monifront eu.gcr.io/${GOOGLE_PROJECT_ID}/${PROJECT_NAME}/monifront:latest
+            gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin https://eu.gcr.io
+            docker push eu.gcr.io/${GOOGLE_PROJECT_ID}/${PROJECT_NAME}/monifront:${CIRCLE_SHA1}
+            docker push eu.gcr.io/${GOOGLE_PROJECT_ID}/${PROJECT_NAME}/monifront:latest
+      - run: 
+          name: Docker build and push back
+          command: |
+            docker build \
+              --build-arg COMMIT_REF=${CIRCLE_SHA1} \
+              --build-arg BUILD_DATE=`date -u +”%Y-%m-%dT%H:%M:%SZ”` \
+              -t ${PROJECT_NAME}/moniback ./backDeploy/.
+            docker tag ${PROJECT_NAME}/moniback eu.gcr.io/${GOOGLE_PROJECT_ID}/${PROJECT_NAME}/moniback:${CIRCLE_SHA1}
+            docker tag ${PROJECT_NAME}/moniback eu.gcr.io/${GOOGLE_PROJECT_ID}/${PROJECT_NAME}/moniback:latest
+            gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin https://eu.gcr.io
+            docker push eu.gcr.io/${GOOGLE_PROJECT_ID}/${PROJECT_NAME}/moniback:${CIRCLE_SHA1}
+            docker push eu.gcr.io/${GOOGLE_PROJECT_ID}/${PROJECT_NAME}/moniback:latest
+
+  deploy:
+    docker:
+      - image: google/cloud-sdk
+    environment:
+      - GOOGLE_PROJECT_ID: "river-autumn-252317"
+      - GOOGLE_COMPUTE_ZONE: "us-central1-a"
+      - GOOGLE_CLUSTER_NAME: "standard-cluster-1"
+    steps:
+      - checkout
+      - run: 
+          name: Setup Google Cloud SDK
+          command: |
+            apt-get install -qq -y gettext
+            echo $GCLOUD_SERVICE_KEY > ${HOME}/gcloud-service-key.json
+            gcloud auth activate-service-account --key-file=${HOME}/gcloud-service-key.json
+            gcloud --quiet config set project ${GOOGLE_PROJECT_ID}
+            gcloud --quiet config set compute/zone ${GOOGLE_COMPUTE_ZONE}
+            gcloud --quiet container clusters get-credentials ${GOOGLE_CLUSTER_NAME}
+      - setup_remote_docker
+      - run: 
+          name: Deploy to Kubernetes
+          command: |
+            kubectl apply -f ./k8s/k8s.yaml
+
+workflows:
+  version: 2
+  test-and-build-image:
+    jobs:
+      #- test
+      - build
+      - deploy:
+          requires:
+            - build
